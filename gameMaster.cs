@@ -159,7 +159,7 @@ public class GameMaster : MonoBehaviour {
                 firstStage = 35;
                 nextUnlock = 50;
                 add = 15;
-                max = 225;
+                max = 335;
                 break;
             case 3:
                 caseOne = 5;
