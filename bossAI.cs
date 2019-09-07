@@ -1,56 +1,68 @@
-﻿using System.Collections;
-using System.Collections.Generic;
-using UnityEngine;
+using System.Collections;
 using Pathfinding;
+using UnityEngine;
 
-//  This makes sure that this script does 
-//  not get added onto a Game Object without the following components
-[RequireComponent(typeof(Rigidbody2D))]
-[RequireComponent(typeof(Seeker))]
+public class Boss : MonoBehaviour {
 
-public class bossAI : MonoBehaviour
-{
     [System.Serializable]
-    public class BossStats
-    {
-        private int maxHealth = 100;
+    public class BossStats {
+        private int maxHealth;
 
-        private int privCurrentHealth;
-
-        public int currentHealth
-        {
-            get { return privCurrentHealth; }
-            set { privCurrentHealth = Mathf.Clamp(value, 0, maxHealth); }
+        private int currentHealth;
+        public int CurrentHealth {
+            get { return currentHealth; }
+            set { currentHealth = Mathf.Clamp (value, 0, maxHealth); }
         }
 
-        public void init()
-        {
+        public void Initialize () {
+            int difficulty = PlayerPrefs.GetInt ("difficulty");
+            switch (difficulty) {
+                case 1:
+                    maxHealth = 60;
+                    break;
+                case 2:
+                    maxHealth = 100;
+                    break;
+                case 3:
+                    maxHealth = 50;
+                    break;
+            }
             currentHealth = maxHealth;
         }
     }
 
-    public BossStats bossStats = new BossStats();
+    #region variables
+    public BossStats bossStats = new BossStats ();
+
+    [Header ("Boss Components")]
+    public Sprite sprite;
 
     //  Point to Instantiate missiles
-    [SerializeField]
-    private Transform firePoint1;
-    [SerializeField]
-    private Transform firePoint2;
+    public Transform firePoint1;
+    public Transform firePoint2;
+
+    //  This object's rigidbody
+    public Rigidbody2D rigidBody2D;
+
+    // This object's Circle Collider 2D
+    public PolygonCollider2D polygonCollider2D;
+
+    // This object's Animator
+    public Animator animator;
 
     //  Caching
-    [SerializeField]
-    private Seeker seeker;
-    [SerializeField]
-    private Rigidbody2D rigidBody2D;
+    public Seeker seeker;
 
-    //  Impact effect of boss
-    public GameObject bossImpact;
-
-    //  Boss Missile
-    public GameObject bossMissile;
+    [Header ("Audio Components")]
+    public AudioSource audioSource;
+    public AudioClip deathSound;
+    public AudioClip shootSound;
 
     //  What to chase
     private Transform target;
+
+    // Spawn points
+    private Transform[] spawnPoints = new Transform[16];
 
     //  How many times each second we will up date our path
     private float updateRate = 2f;
@@ -83,158 +95,163 @@ public class bossAI : MonoBehaviour
     //  Stop shooting if player is far
     private bool allowFire = true;
 
+    //  Prevents the death logic from TakeDamage() from repeating 
+    private bool justDied = false;
+
+    private int difficulty;
+    #endregion
+
+    #region initialization
     // Start is called before the first frame update
-    void Start()
-    {
-        bossStats.init();
+    void OnEnable () {
+        bossStats.Initialize ();
+        ResetValues ();
 
-        //  Error Checking; this component should already be filled in the inspector
-        if (firePoint1 == null || firePoint2 == null)
-        {
-            if (transform.Find("firePoint1") != null || transform.Find("firePoint2") != null)
-            {
-                firePoint1 = transform.Find("firePoint1");
-                firePoint2 = transform.Find("firePoint2");
-            }
-            else
-            {
-                Debug.LogError("firePoint1 or firePoint2 children are missing!");
-                return;
-            }
-        }
+        //  Moves the object back to a spawn point... if not used
+        //  it will be spawned at its last death location
+        Teleport ();
 
-        //  Error Checking; this component should already be filled in the inspector
-        if (seeker == null)
-        {
-            if (GetComponent<Seeker>() != null)
-            {
-                seeker = GetComponent<Seeker>();
-            }
-            else
-            {
-                Debug.LogError("Seeker component is missing from this object!");
-                return;
-            }
-        }
-
-        //  Error Checking; this component should already be filled in the inspector
-        if (rigidBody2D == null)
-        {
-            if (GetComponent<Rigidbody2D>() != null)
-            {
-                rigidBody2D = GetComponent<Rigidbody2D>();
-            }
-            else
-            {
-                Debug.LogError("Rigidbody2D component is missing from this object!");
-                return;
-            }
-        }
-
-        if (target == null)
-        {
-            if (!searchingForPlayer)
-            {
+        if (target == null) {
+            if (!searchingForPlayer) {
                 searchingForPlayer = true;
-                StartCoroutine(searchForPlayer());
+                StartCoroutine (searchForPlayer ());
             }
             return;
         }
 
         //  Start a new path to the target position, return the result to the OnPathComplete method
-        seeker.StartPath(transform.position, target.position, OnPathComplete);
-        StartCoroutine(UpdatePath());
+        seeker.StartPath (transform.position, target.position, OnPathComplete);
+        StartCoroutine (UpdatePath ());
     }
 
-    IEnumerator searchForPlayer()
-    {
-        GameObject searchResult = GameObject.FindGameObjectWithTag("Player");
-        if (searchResult == null)
-        {
-            yield return new WaitForSeconds(0.5f);
-            StartCoroutine(searchForPlayer());
+    private void ResetValues () {
+        GameObject sp = GameObject.Find ("Spawn Points");
+        for (int i = 0; i < 16; i++) {
+            if (!spawnPoints[i]) {
+                spawnPoints[i] = sp.transform.GetChild (i);
+            }
         }
-        else
-        {
+
+        difficulty = PlayerPrefs.GetInt ("difficulty");
+        switch (difficulty) {
+            case 1:
+                speed = 150;
+                break;
+            case 2:
+                speed = 200;
+                break;
+            case 3:
+                speed = 100;
+                break;
+        }
+
+        updateRate = 2f;
+        path = null;
+        speed = 200f;
+        _fMode = ForceMode2D.Force;
+        pathIsEnded = false;
+        nextWayPointDistance = 1;
+        currentWayPoint = 0;
+        searchingForPlayer = false;
+        justTouched = false;
+        justFired = false;
+        allowFire = true;
+        justDied = false;
+    }
+    #endregion
+
+    #region target search
+    IEnumerator searchForPlayer () {
+        GameObject searchResult = GameObject.FindGameObjectWithTag ("Player");
+        if (searchResult == null) {
+            yield return new WaitForSeconds (0.5f);
+            StartCoroutine (searchForPlayer ());
+        } else {
             target = searchResult.transform;
             searchingForPlayer = false;
-            StartCoroutine(UpdatePath());
+            StartCoroutine (UpdatePath ());
             yield return false;
         }
     }
+    #endregion
 
-    IEnumerator UpdatePath()
-    {
-        if (target == null)
-        {
-            if (!searchingForPlayer)
-            {
+    #region pathing
+    IEnumerator UpdatePath () {
+        if (target == null) {
+            if (!searchingForPlayer) {
                 searchingForPlayer = true;
-                StartCoroutine(searchForPlayer());
+                StartCoroutine (searchForPlayer ());
             }
             yield return false;
-        }
-        else
-        {
+        } else {
             //  Start a new path to the target position, return the result to the On Path Complete Method
-            seeker.StartPath(transform.position, target.position, OnPathComplete);
+            seeker.StartPath (transform.position, target.position, OnPathComplete);
 
-            yield return new WaitForSeconds(1f / updateRate);
-            StartCoroutine(UpdatePath());
+            yield return new WaitForSeconds (1f / updateRate);
+            StartCoroutine (UpdatePath ());
         }
     }
 
-    public void OnPathComplete(Path p)
-    {
-        if (!p.error)
-        {
+    public void OnPathComplete (Path p) {
+        if (!p.error) {
             path = p;
             currentWayPoint = 0;
         }
     }
+    #endregion
 
+    #region teleporting
+    private void Teleport () {
+        StopCoroutine ("EnableDynamic"); // Restarts the function; prevents swinging
+        rigidBody2D.bodyType = RigidbodyType2D.Static;
+        int randInt = UnityEngine.Random.Range (0, 15);
+        transform.position = spawnPoints[randInt].position;
+        StartCoroutine ("EnableDynamic");
+    }
+
+    private IEnumerator EnableDynamic () {
+        yield return new WaitForSeconds (0.5f);
+        rigidBody2D.bodyType = RigidbodyType2D.Dynamic;
+    }
+    #endregion
+
+    #region update
     // Use FixedUpdate for physics stuff
-    void FixedUpdate()
-    {
-        //  Shoot Prefab
-        if (!justFired && allowFire)
-        {
+    void FixedUpdate () {
+        //  Debugging purposes...
+        /*
+        if (Input.GetKey ("space")) {
+            TakeDamage (100, false);
+        }
+        */
+
+        //  Shoot Missiles
+        if (!justFired && allowFire) {
             justFired = true;
-            StartCoroutine(fireMissile());
+            StartCoroutine (FireMissile ());
         }
 
-        if (target == null)
-        {
-            if (!searchingForPlayer)
-            {
+        if (target == null) {
+            if (!searchingForPlayer) {
                 searchingForPlayer = true;
-                StartCoroutine(searchForPlayer());
+                StartCoroutine (searchForPlayer ());
             }
             return;
         }
 
-        if (Vector3.Distance(target.transform.position, transform.position) >= 15)
-        {
+        //  Stops shooting and just focuses on moving towards player if too far
+        if ((target.transform.position - transform.position).sqrMagnitude >= 15 * 15) {
             allowFire = false;
-        }
-        else
-        {
+        } else {
             allowFire = true;
         }
 
-        //  Always rotate face the player 
-        float angle = Mathf.Atan2(transform.position.y - target.transform.position.y, transform.position.x - target.transform.position.x) * Mathf.Rad2Deg - 90;
-        transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.Euler(0, 0, angle), 3 * Time.deltaTime);
-
-        if (path == null)
-        {
+        if (path == null) {
             return;
         }
 
-        if (currentWayPoint >= path.vectorPath.Count)
-        {
-            if (pathIsEnded)
-            {
+        if (currentWayPoint >= path.vectorPath.Count) {
+            if (pathIsEnded) {
                 return;
             }
 
@@ -244,69 +261,151 @@ public class bossAI : MonoBehaviour
 
         pathIsEnded = false;
 
+        //  If player is way too far, teleport to a spawn point
+        if ((target.transform.position - transform.position).sqrMagnitude >= 30 * 30) {
+            Teleport ();
+        }
+
         //  Direction to the next waypoint
         Vector3 dir = path.vectorPath[currentWayPoint] - transform.position;
         dir *= speed * Time.fixedDeltaTime;
 
         //  Move the AI
-        rigidBody2D.AddForce(dir, _fMode);
+        rigidBody2D.AddForce (dir, _fMode);
 
-        float dist = Vector3.Distance(transform.position, path.vectorPath[currentWayPoint]);
+        //  Always rotate to face the player 
+        float angle = Mathf.Atan2 (transform.position.y - target.transform.position.y, transform.position.x - target.transform.position.x) * Mathf.Rad2Deg - 90;
+        transform.rotation = Quaternion.Slerp (transform.rotation, Quaternion.Euler (0, 0, angle), 3 * Time.deltaTime);
 
-        if (dist < nextWayPointDistance)
-        {
+        if ((path.vectorPath[currentWayPoint] - transform.position).sqrMagnitude < nextWayPointDistance * nextWayPointDistance) {
             currentWayPoint++;
             return;
         }
     }
 
-    IEnumerator fireMissile()
-    {
-        Instantiate(bossMissile, firePoint1.position, firePoint1.rotation);
-        Instantiate(bossMissile, firePoint2.position, firePoint2.rotation);
-        yield return new WaitForSeconds(0.75f);
+    private IEnumerator FireMissile () {
+        audioSource.PlayOneShot (shootSound);
+        GameObject bullet1 = ObjectPooler.SharedInstance.GetPooledObject ("bossMissile(Clone)");
+        if (bullet1 != null) {
+            bullet1.transform.position = firePoint1.position;
+            bullet1.transform.rotation = firePoint1.rotation;
+            bullet1.SetActive (true);
+        }
+        GameObject bullet2 = ObjectPooler.SharedInstance.GetPooledObject ("bossMissile(Clone)");
+        if (bullet2 != null) {
+            bullet2.transform.position = firePoint2.position;
+            bullet2.transform.rotation = firePoint2.rotation;
+            bullet2.SetActive (true);
+        }
+        yield return new WaitForSeconds (0.75f);
         justFired = false;
     }
+    #endregion
 
-    //  Collision damage uses OnCollisionStay2D and repeatDamage
-    private void OnCollisionStay2D(Collision2D collision)
-    {
-        if (collision.transform.tag == "Player")
-        {
-            if (!justTouched)
-            {
+    #region damage player
+    //  Collision damage uses OnCollisionStay2D and RepeatDamage
+    private void OnCollisionStay2D (Collision2D collision) {
+        if (collision.transform.tag == "Player") {
+            //  Prevents repeated rapid application of damages 
+            //  (basically will one shot the player if justTouched is not in the logic)
+            if (!justTouched) {
                 justTouched = true;
-                Instantiate(bossImpact, collision.contacts[0].point, Quaternion.identity);
-                StartCoroutine(repeatDamage(collision));
+
+                //  Show the impact
+                GameObject impact = ObjectPooler.SharedInstance.GetPooledObject ("greenImpact(Clone)");
+                if (impact != null) {
+                    impact.transform.position = collision.contacts[0].point;
+                    impact.transform.rotation = Quaternion.identity;
+                    impact.SetActive (true);
+                }
+
+                //  Repeat the damage if there is still collision
+                StartCoroutine (RepeatDamage (collision));
             }
         }
     }
 
     //  Prevents OnCollisionStay2D from continuosly damaging player... hence the delay of 1 second
-    IEnumerator repeatDamage(Collision2D collision)
-    {
-        if (collision.transform.GetComponent<player>() != null)
-        {
-            collision.transform.GetComponent<player>().takeDamage(20);
-            yield return new WaitForSeconds(1f);
-            justTouched = false;
+    IEnumerator RepeatDamage (Collision2D collision) {
+        switch (difficulty) {
+            case 1:
+                collision.transform.GetComponent<Player> ().TakeDamage (10 + WaveSpawner.RoundsBeat);
+                break;
+            case 2:
+                collision.transform.GetComponent<Player> ().TakeDamage (15 + WaveSpawner.RoundsBeat);
+                break;
+            case 3:
+                collision.transform.GetComponent<Player> ().TakeDamage (20 + WaveSpawner.RoundsBeat);
+                break;
         }
-        else
-        {
-            Debug.LogError("Player is missing 'player'!");
-            yield return false;
+        yield return new WaitForSeconds (1f);
+
+        //  justTouched returns to false so the logic can repeat itself
+        justTouched = false;
+    }
+    #endregion
+
+    #region take damage
+    public void TakeDamage (int damage, bool virus) {
+        if (bossStats.CurrentHealth - damage <= 0 && !justDied) {
+            justDied = true;
+            if (GameMaster.Instance) {
+                switch (difficulty) {
+                    case 1:
+                        GameMaster.Instance.UpdateScore (225);
+                        break;
+                    case 2:
+                        GameMaster.Instance.UpdateScore (425);
+                        break;
+                    case 3:
+                        GameMaster.Instance.UpdateScore (875);
+                        break;
+                }
+            }
+            audioSource.PlayOneShot (deathSound);
+
+            //  Stop the Boss and play its death animation
+            animator.enabled = true;
+            rigidBody2D.bodyType = RigidbodyType2D.Static;
+            polygonCollider2D.enabled = false;
+
+            // Store last position for power up spawn
+            Vector3 tempPos = this.transform.position;
+
+            // Spawn Power Up with 100% Chance
+            GameObject powerUp = ObjectPooler.SharedInstance.GetPooledObject ("Power Up(Clone)");
+            if (powerUp != null) {
+                powerUp.transform.position = transform.position;
+                powerUp.transform.rotation = Quaternion.identity;
+                powerUp.SetActive (true);
+            }
+
+            //  Spawns explosive virus if hit by explosive virus
+            if (virus) {
+                GameObject explosion = ObjectPooler.SharedInstance.GetPooledObject ("explosiveVirus(Clone)");
+                if (explosion != null) {
+                    explosion.transform.position = transform.position;
+                    explosion.transform.rotation = transform.rotation;
+                    explosion.SetActive (true);
+                }
+            }
+
+            StartCoroutine (ReturnToPool ());
+        } else {
+            bossStats.CurrentHealth -= damage;
         }
     }
 
-    public void takeDamage(int damage)
-    {
-        if (bossStats.currentHealth - damage <= 0)
-        {
-            gameMaster.gm.Kill(this.gameObject);
-        }
-        else
-        {
-            bossStats.currentHealth -= damage;
-        }
+    private IEnumerator ReturnToPool () {
+        yield return new WaitForSeconds (animator.GetCurrentAnimatorStateInfo (0).length);
+
+        //  Resets the object to initial settings
+        animator.enabled = false;
+        GetComponent<SpriteRenderer> ().sprite = sprite;
+        polygonCollider2D.enabled = true;
+
+        //  Disables object...
+        this.gameObject.SetActive (false);
     }
+    #endregion
 }
