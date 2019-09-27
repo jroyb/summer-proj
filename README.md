@@ -1,4 +1,4 @@
-# summer-proj (Astro Raid old codes)
+# summer-proj (Astro Raid sample codes)
 
 A lot of the code has been refactored since these uploads...
 
