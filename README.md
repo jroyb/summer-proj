@@ -4,7 +4,7 @@ A lot of the code has been refactored since these uploads...
 
 Google Play:
 -
-https://play.google.com/store/apps/details?id=com.jroyb.AstroRaid \
+https://play.google.com/store/apps/details?id=com.jroyb.AstroRaid
 \
 Apply App Store:
 -
